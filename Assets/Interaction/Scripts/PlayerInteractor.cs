@@ -59,6 +59,17 @@ namespace InteractionSystem
         [Tooltip("Clamps the auto-fit distance. Large objects will be cropped if this is too small.")]
         public float maxHoldDistance = 2.5f;
 
+        [Header("Camera Levelling")]
+        [Tooltip("Instead of freezing the camera wherever it was, ease it up to level over the pickup " +
+                 "so the lift reads as raising the object to eye height. Reversed when placing it back.")]
+        public bool levelCameraOnPickup = true;
+
+        [Tooltip("Pitch the camera settles at while inspecting. 0 is dead level, negative looks up.")]
+        [Range(-45f, 45f)] public float inspectPitch = 0f;
+
+        [Tooltip("Roll the camera settles at while inspecting. Cancels any leftover strafe tilt.")]
+        [Range(-15f, 15f)] public float inspectRoll = 0f;
+
         [Header("Inspect Rotation")]
         [Tooltip("Degrees of object rotation per pixel of mouse movement.")]
         public float rotateSensitivity = 0.35f;
@@ -118,6 +129,9 @@ namespace InteractionSystem
         Quaternion _currentSpin = Quaternion.identity;
         Quaternion _spinStart = Quaternion.identity;
 
+        EasyPeasyFirstPersonController.FirstPersonController _fpc;
+        float _pitchStart, _rollStart;                  // camera orientation to restore on place
+
         readonly List<bool> _colliderStates = new List<bool>();
         bool _bodyWasKinematic, _bodyUsedGravity;
         RigidbodyInterpolation _bodyInterpolation;
@@ -141,6 +155,8 @@ namespace InteractionSystem
                 return;
             }
 
+            _fpc = GetComponent<EasyPeasyFirstPersonController.FirstPersonController>();
+
             if (disableWhileInspecting == null || disableWhileInspecting.Length == 0)
                 disableWhileInspecting = AutoFindControllers();
 
@@ -158,8 +174,7 @@ namespace InteractionSystem
         Behaviour[] AutoFindControllers()
         {
             var found = new List<Behaviour>();
-            var fpc = GetComponent<EasyPeasyFirstPersonController.FirstPersonController>();
-            if (fpc != null) found.Add(fpc);
+            if (_fpc != null) found.Add(_fpc);
             return found.ToArray();
         }
 
@@ -220,6 +235,7 @@ namespace InteractionSystem
             if (_phase != Phase.Idle && _held == null)
             {
                 _phase = Phase.Idle;
+                ApplyCameraLevel(0f);
                 SetPlayerFrozen(false);
                 UpdateBlur();
                 return;
@@ -239,10 +255,14 @@ namespace InteractionSystem
                         _phase = Phase.Holding;
                         _currentSpin = _targetSpin;
                     });
+                    // Camera first: the hold anchor is derived from where the camera is
+                    // looking, so the object rises along with the view rather than lagging it.
+                    ApplyCameraLevel(Ease(_tween));
                     ApplyPickupPose(Ease(_tween));
                     break;
 
                 case Phase.Holding:
+                    ApplyCameraLevel(1f);
                     HandleSpinInput();
                     ApplyHoldPose();
                     if (InteractPressed()) BeginPlace();
@@ -250,6 +270,8 @@ namespace InteractionSystem
 
                 case Phase.PuttingDown:
                     AdvanceTween(placeDuration, FinishPlace);
+                    // Reversed: the view tips back down to where it was as the object lowers.
+                    ApplyCameraLevel(1f - Ease(_tween));
                     ApplyPlacePose(Ease(_tween));
                     break;
             }
@@ -323,6 +345,13 @@ namespace InteractionSystem
             _restParent = target.transform.parent;
             _restPosition = target.transform.position;
             _restRotation = target.transform.rotation;
+
+            // Remember where the head was pointing so the view can tip back to it on release.
+            if (_fpc != null)
+            {
+                _pitchStart = _fpc.CameraPitch;
+                _rollStart = _fpc.CameraRoll;
+            }
 
             // Freeze physics so it doesn't fight the tween or shove the player.
             var rb = target.Body;
@@ -412,6 +441,19 @@ namespace InteractionSystem
             _currentSpin = Quaternion.Slerp(_currentSpin, _targetSpin, k);
         }
 
+        /// <summary>
+        /// Eases the head from where the player was looking (t=0) to the inspect orientation (t=1).
+        /// Only meaningful while the controller is disabled, otherwise mouse look fights it.
+        /// </summary>
+        void ApplyCameraLevel(float t)
+        {
+            if (!levelCameraOnPickup || _fpc == null) return;
+
+            _fpc.CameraPitch = Mathf.Lerp(_pitchStart, inspectPitch, t);
+            _fpc.CameraRoll = Mathf.Lerp(_rollStart, inspectRoll, t);
+            _fpc.ApplyCameraOrientation();
+        }
+
         void ApplyHoldPose()
         {
             if (_held == null) return;
@@ -481,6 +523,10 @@ namespace InteractionSystem
 
                 target.onPlacedDown?.Invoke();
             }
+
+            // Hand the exact original orientation back to the controller before re-enabling it,
+            // otherwise HandleRotation resumes from its stale xRotation and the view snaps.
+            ApplyCameraLevel(0f);
 
             _held = null;
             _phase = Phase.Idle;

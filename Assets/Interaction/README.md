@@ -26,9 +26,9 @@ That's it. Play, look at the object, walk up, press **E**.
 |---|---|
 | Look at object within `Focus Range` (6 m) | Popup fades in above it |
 | Walk within `Pickup Range` (2.5 m) | Popup gains an `[E]` hint |
-| **E** | Object lifts on a gentle arc into an inspect pose; background defocuses; movement and camera look freeze |
+| **E** | Mouse look hands over to the interactor: the view eases up to level while the object rises with it into the inspect pose. Background defocuses. |
 | Mouse | Rotates the held object, trackball-style |
-| **E** | Object settles back exactly where it was; blur fades; control returns |
+| **E** | The view tips back down to exactly where you were looking as the object lowers to its resting spot; blur fades; control returns |
 
 ## Tuning
 
@@ -38,6 +38,8 @@ That's it. Play, look at the object, walk up, press **E**.
 - `Aim Assist Radius` — thickens the look ray so you don't need pixel-perfect aim. 0 disables it.
 - `Pickup Duration` / `Place Duration` / `Travel Arc Height` — the "gentleness" of the lift. Longer + higher arc reads slower and more deliberate.
 - `Auto Fit Padding` — how much of the screen the object fills. Higher = further away = smaller.
+- `Level Camera On Pickup` — on by default. The camera eases from wherever you were looking (usually down at the floor) up to `Inspect Pitch` over the pickup, and reverses on release, so you never get a hard freeze mid-glance. Turn it off to hold the view exactly where it was.
+- `Inspect Pitch` / `Inspect Roll` — the orientation the head settles at. Try `-4` pitch for a very slight upward tilt, which reads as holding something up to the light.
 - `Rotate Sensitivity` / `Rotate Damping` — damping is an exponential smoothing rate; drop it to ~5 for a heavy, floaty object, raise to ~25 for something crisp.
 - `Aperture` / `Focal Length` — blur strength. Low aperture and high focal length = more blur. Focus distance is driven automatically to wherever the object is being held.
 - `Disable While Inspecting` — components switched off during inspect. Add your own scripts here (footstep audio, weapon sway) if they should pause too.
@@ -71,11 +73,18 @@ defaults in `InteractionPromptUI.cs`.
 - **Scripting hooks:** `PlayerInteractor.IsInspecting`, `.HeldObject`, `.FocusedObject`,
   and `.CancelInspect()` to force-drop before a scene load or cutscene.
 
+- **Camera levelling needs the Easy Peasy controller.** It reaches the private `xRotation`
+  via an additive `partial` declaration rather than editing the vendor file. If you swap
+  controllers, levelling silently switches off and the camera just freezes in place —
+  reimplement `CameraPitch` / `CameraRoll` / `ApplyCameraOrientation()` for your new
+  controller to get it back.
+
 ## Files
 
 ```
 Assets/Interaction/Scripts/
-  Interactable.cs          marker + per-object settings
-  PlayerInteractor.cs      raycast, pickup/place state machine, blur, player freeze
-  InteractionPromptUI.cs   world-space billboard popup, built at runtime
+  Interactable.cs                       marker + per-object settings
+  PlayerInteractor.cs                   raycast, pickup/place state machine, blur, camera levelling
+  InteractionPromptUI.cs                world-space billboard popup, built at runtime
+  FirstPersonController.CameraAccess.cs additive partial exposing the controller's camera pitch
 ```
