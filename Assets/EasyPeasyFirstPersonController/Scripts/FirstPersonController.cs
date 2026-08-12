@@ -91,6 +91,109 @@ namespace EasyPeasyFirstPersonController
         [HideInInspector] public bool isInWater;
         [HideInInspector] public float currentLedgeCooldown;
 
+        // ==================================================================
+        //  PARKOUR EXTENSION
+        // ==================================================================
+
+        [Header("Parkour - Sprint Momentum")]
+        [Tooltip("Master switch for the whole parkour layer: momentum, wall running and landing impact.")]
+        public bool enableParkour = true;
+
+        [Tooltip("Top speed once momentum is fully built. Sprint Speed is the starting point.")]
+        public float parkourSpeed = 9f;
+
+        [Tooltip("Seconds of sustained sprinting needed to reach full momentum.")]
+        public float momentumBuildTime = 2.5f;
+
+        [Tooltip("Seconds for momentum to bleed back to zero after you release Shift.")]
+        public float momentumDecayTime = 1f;
+
+        [Tooltip("Field of view at full momentum. Sprint Fov is the value at zero momentum.")]
+        public float parkourFov = 88f;
+
+        [Tooltip("Wall running keeps momentum topped up instead of letting it decay.")]
+        public bool wallRunSustainsMomentum = true;
+
+        [Tooltip("Current momentum, 0 to 1. Read by the speed effects and the wall run entry check.")]
+        [HideInInspector] public float momentum;
+
+        [Header("Parkour - Wall Run")]
+        [Tooltip("Which layers count as runnable walls. Leave as Nothing to fall back to Ground Mask.")]
+        public LayerMask wallRunMask;
+
+        [Tooltip("How far to the side a wall can be and still be grabbed.")]
+        public float wallCheckDistance = 0.9f;
+
+        [Tooltip("Momentum needed before walls become sticky. Stops you clinging to things while walking.")]
+        [Range(0f, 1f)] public float minMomentumToWallRun = 0.35f;
+
+        [Tooltip("Gravity while on a wall. Much lower than normal gravity, so you slide down slowly.")]
+        public float wallRunGravity = 2.2f;
+
+        [Tooltip("Seconds you can stay on a single wall before it lets go.")]
+        public float wallRunMaxDuration = 2f;
+
+        [Tooltip("Speed you travel along the wall.")]
+        public float wallRunSpeed = 8.5f;
+
+        [Tooltip("Degrees the camera leans toward the wall.")]
+        public float wallRunCameraTilt = 14f;
+
+        [Tooltip("Constant push into the wall so contact is not lost on small bumps.")]
+        public float wallRunStickForce = 2f;
+
+        [Tooltip("Seconds before the same wall can be grabbed again. Forces you to alternate walls.")]
+        public float wallReattachCooldown = 0.25f;
+
+        [Tooltip("Allow the first stick to happen while still on the ground. Off means you must jump at the wall.")]
+        public bool allowWallRunFromGround = true;
+
+        [Tooltip("Small upward pop when latching on, so a ground-started wall run lifts clear of the floor.")]
+        public float wallRunEntryHop = 2.5f;
+
+        [Tooltip("Seconds after latching before the wall run can end by touching the ground again. " +
+                 "Stops a ground-started run from cancelling itself on the first frame.")]
+        public float wallRunGroundGrace = 0.25f;
+
+        [Header("Parkour - Wall Jump")]
+        [Tooltip("MASTER INTENSITY for the wall-to-wall jump. Scales all three forces below at once. " +
+                 "Raise it for a wilder ping-pong, lower it for something tighter and more controlled.")]
+        [Range(0.1f, 3f)] public float wallJumpIntensity = 1f;
+
+        [Tooltip("Push straight out from the wall. This is what carries you to the opposite wall.")]
+        public float wallJumpSideForce = 7f;
+
+        [Tooltip("Upward kick, so each bounce gains a little height.")]
+        public float wallJumpUpForce = 5f;
+
+        [Tooltip("Push along the wall, preserving your run direction through the jump.")]
+        public float wallJumpForwardForce = 3f;
+
+        [Header("Parkour - Landing Impact")]
+        [Tooltip("The camera dives toward the ground on a hard landing, then snaps back up.")]
+        public bool enableLandingImpact = true;
+
+        [Tooltip("Downward speed (m/s) below which landings are ignored.")]
+        public float landingImpactThreshold = 6f;
+
+        [Tooltip("Downward speed (m/s) that produces the full-strength effect.")]
+        public float landingImpactMaxSpeed = 18f;
+
+        [Tooltip("Degrees the view pitches down at full strength.")]
+        public float landingPitchAmount = 28f;
+
+        [Tooltip("Metres the camera drops at full strength.")]
+        public float landingDipAmount = 0.45f;
+
+        [Tooltip("Seconds for the view to dive toward the ground. Keep this short and sharp.")]
+        public float landingDiveDuration = 0.12f;
+
+        [Tooltip("Seconds for the view to correct itself back to level.")]
+        public float landingRecoverDuration = 0.45f;
+
+        [Tooltip("Fraction of the recoil during which mouse look is ignored. 0 keeps you in control throughout.")]
+        [Range(0f, 1f)] public float landingLookLockFraction = 0.55f;
+
         [Header("Visual Preferences")]
         public bool useFovKick = true;
         public bool useHeadBob = true;
@@ -109,6 +212,7 @@ namespace EasyPeasyFirstPersonController
         private void Awake()
         {
             cam = playerCamera.GetComponent<Camera>();
+            cameraLocalRestPos = playerCamera.localPosition;
             targetFov = normalFov;
             targetCameraY = standingCameraHeight;
             originalCamY = standingCameraHeight;
@@ -124,6 +228,9 @@ namespace EasyPeasyFirstPersonController
 
             currentState = states.Grounded();
             currentState.EnterState();
+
+            if (enableParkour && GetComponent<ParkourSpeedEffects>() == null)
+                gameObject.AddComponent<ParkourSpeedEffects>();
         }
 
         private void Update()
@@ -131,7 +238,18 @@ namespace EasyPeasyFirstPersonController
             if (currentLedgeCooldown > 0)
                 currentLedgeCooldown -= Time.deltaTime;
 
+            if (wallReattachTimer > 0)
+                wallReattachTimer -= Time.deltaTime;
+
+            // Rising edge of the jump key. The base input only reports "held", which would make
+            // a wall jump fire the instant you touched a wall with Space still down.
+            jumpPressed = input.jump && !jumpHeldLastFrame;
+            jumpHeldLastFrame = input.jump;
+
             isGrounded = characterController.isGrounded || Physics.CheckSphere(groundCheck.position, characterController.radius * 0.9f, groundMask, QueryTriggerInteraction.Ignore);
+
+            UpdateMomentum();
+            UpdateLandingImpact();
 
             currentState.UpdateState();
             HandleRotation();
@@ -143,6 +261,13 @@ namespace EasyPeasyFirstPersonController
             float mouseX = input.lookInput.x * mouseSensitivity;
             float mouseY = input.lookInput.y * mouseSensitivity;
 
+            // A hard landing briefly takes the view away from the player.
+            if (IsLookLocked)
+            {
+                mouseX = 0f;
+                mouseY = 0f;
+            }
+
             transform.Rotate(Vector3.up * mouseX);
 
             xRotation -= mouseY;
@@ -152,7 +277,7 @@ namespace EasyPeasyFirstPersonController
             float combinedTargetTilt = (useCameraTilt ? targetTilt : 0) + strafeTilt;
 
             currentTilt = Mathf.SmoothDamp(currentTilt, combinedTargetTilt, ref tiltVelocity, 0.1f);
-            playerCamera.localRotation = Quaternion.Euler(xRotation, 0, currentTilt);
+            ApplyCameraOrientation();
         }
 
         public void UpdateVisuals()
@@ -211,6 +336,10 @@ namespace EasyPeasyFirstPersonController
             float smoothedY = Mathf.Lerp(cameraParent.localPosition.y, desiredY, Time.deltaTime * 15f);
 
             cameraParent.localPosition = new Vector3(cameraParent.localPosition.x, smoothedY, cameraParent.localPosition.z);
+
+            // The landing dip rides on the camera itself rather than cameraParent, so it stays
+            // sharp instead of being smoothed away by the head-bob lerp above.
+            playerCamera.localPosition = cameraLocalRestPos + Vector3.up * landingDipOffset;
         }
 
         [HideInInspector] public Vector3 cameraShakeDirection;
@@ -229,6 +358,215 @@ namespace EasyPeasyFirstPersonController
 
             return Physics.SphereCast(origin, radius, Vector3.up, out _, checkDistance, groundMask, QueryTriggerInteraction.Ignore);
         }
+        // ==================================================================
+        //  PARKOUR RUNTIME
+        // ==================================================================
+
+        [HideInInspector] public bool jumpPressed;      // rising edge of the jump key
+        private bool jumpHeldLastFrame;
+
+        [HideInInspector] public float wallReattachTimer;
+        [HideInInspector] public Collider lastWall;     // wall we most recently jumped off
+
+        private Vector3 cameraLocalRestPos;
+        private Vector3 pendingLaunch;
+        private bool hasPendingLaunch;
+
+        private float landingTimer = float.MaxValue;
+        private float landingTotal;
+        private float landingStrength;
+        private float landingPitchOffset;
+        private float landingDipOffset;
+
+        /// <summary>True while a hard landing has taken the camera away from the player.</summary>
+        public bool IsLookLocked =>
+            enableLandingImpact && landingTimer < landingTotal * landingLookLockFraction;
+
+        /// <summary>Speed the player should be moving at, given how much momentum has built up.</summary>
+        public float CurrentSprintSpeed =>
+            enableParkour ? Mathf.Lerp(sprintSpeed, parkourSpeed, momentum) : sprintSpeed;
+
+        /// <summary>Air control target speed, so a fast run carries its speed through a jump.</summary>
+        public float CurrentAirSpeed =>
+            enableParkour && input != null && input.sprint
+                ? Mathf.Lerp(walkSpeed, parkourSpeed, momentum)
+                : walkSpeed;
+
+        /// <summary>Field of view matching the current momentum.</summary>
+        public float CurrentSprintFov =>
+            enableParkour ? Mathf.Lerp(sprintFov, parkourFov, momentum) : sprintFov;
+
+        /// <summary>Layers treated as runnable walls, falling back to Ground Mask if unset.</summary>
+        public LayerMask EffectiveWallMask => wallRunMask.value == 0 ? groundMask : wallRunMask;
+
+        /// <summary>
+        /// Momentum builds while you hold sprint and push forward, and bleeds away when you
+        /// stop. Wall running can hold it steady so a chain of jumps doesn't cost you speed.
+        /// </summary>
+        private void UpdateMomentum()
+        {
+            if (!enableParkour) { momentum = 0f; return; }
+
+            bool onWall = currentState is PlayerWallRunState;
+            bool building = (input.sprint && input.moveInput.y > 0.1f && !isInWater)
+                            || (onWall && wallRunSustainsMomentum);
+
+            float rate = building
+                ? 1f / Mathf.Max(0.01f, momentumBuildTime)
+                : -1f / Mathf.Max(0.01f, momentumDecayTime);
+
+            momentum = Mathf.Clamp01(momentum + rate * Time.deltaTime);
+        }
+
+        /// <summary>
+        /// Looks for a runnable wall to the left and right of the player at chest height.
+        /// <paramref name="side"/> is -1 for a wall on the left, +1 for one on the right.
+        /// </summary>
+        public bool CheckWall(out RaycastHit hit, out int side)
+        {
+            hit = default;
+            side = 0;
+            if (!enableParkour) return false;
+
+            Vector3 origin = transform.position + Vector3.up * (characterController.height * 0.6f);
+            LayerMask mask = EffectiveWallMask;
+
+            bool hitRight = Physics.Raycast(origin, transform.right, out RaycastHit right,
+                                            wallCheckDistance, mask, QueryTriggerInteraction.Ignore);
+            bool hitLeft = Physics.Raycast(origin, -transform.right, out RaycastHit left,
+                                           wallCheckDistance, mask, QueryTriggerInteraction.Ignore);
+
+            // Prefer whichever is nearer if both are in range.
+            if (hitRight && (!hitLeft || right.distance <= left.distance)) { hit = right; side = 1; }
+            else if (hitLeft) { hit = left; side = -1; }
+            else return false;
+
+            // Reject floors, ceilings and steep ramps: we only want near-vertical surfaces.
+            if (Mathf.Abs(Vector3.Dot(hit.normal, Vector3.up)) > 0.3f) return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// True if the player is currently allowed to latch onto a wall. Requires real speed,
+        /// sprint held, and that this isn't the wall we just pushed off.
+        /// </summary>
+        public bool CanStartWallRun(out RaycastHit hit, out int side)
+        {
+            hit = default;
+            side = 0;
+
+            if (!enableParkour) return false;
+            if (momentum < minMomentumToWallRun) return false;
+            if (!input.sprint) return false;
+            if (isGrounded && !allowWallRunFromGround) return false;
+            if (isInWater) return false;
+
+            if (!CheckWall(out hit, out side)) return false;
+
+            // Don't immediately re-grab the wall we just left.
+            if (wallReattachTimer > 0f && hit.collider == lastWall) return false;
+
+            // Must be travelling along the wall, not charging straight into it. Without this
+            // you'd stick to any surface you happened to run face-first at.
+            if (Mathf.Abs(Vector3.Dot(transform.forward, hit.normal)) > 0.75f) return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Queues a velocity for the next Jumping state, so a wall jump can override the
+        /// standard straight-up jump. Consumed once, on the next EnterState.
+        /// </summary>
+        public void QueueLaunch(Vector3 velocity)
+        {
+            pendingLaunch = velocity;
+            hasPendingLaunch = true;
+        }
+
+        public bool ConsumeLaunch(out Vector3 velocity)
+        {
+            velocity = pendingLaunch;
+            bool had = hasPendingLaunch;
+            hasPendingLaunch = false;
+            return had;
+        }
+
+        /// <summary>
+        /// Called as the player touches down. A fast enough impact throws the camera at the
+        /// ground and then hauls it back up, with look control suspended for part of it.
+        /// </summary>
+        public void ReportLanding(float verticalSpeed)
+        {
+            if (!enableLandingImpact) return;
+
+            float impactSpeed = -verticalSpeed;          // downward is negative, flip it
+            if (impactSpeed < landingImpactThreshold) return;
+
+            landingStrength = Mathf.Clamp01(
+                Mathf.InverseLerp(landingImpactThreshold, landingImpactMaxSpeed, impactSpeed));
+
+            landingTimer = 0f;
+            landingTotal = landingDiveDuration + landingRecoverDuration;
+        }
+
+        private void UpdateLandingImpact()
+        {
+            if (landingTimer >= landingTotal)
+            {
+                landingPitchOffset = 0f;
+                landingDipOffset = 0f;
+                return;
+            }
+
+            landingTimer += Time.deltaTime;
+
+            float t;
+            if (landingTimer <= landingDiveDuration)
+            {
+                // Dive: fast out-ease so the hit lands immediately.
+                float d = Mathf.Clamp01(landingTimer / Mathf.Max(0.001f, landingDiveDuration));
+                t = Mathf.Sin(d * Mathf.PI * 0.5f);
+            }
+            else
+            {
+                // Recover: ease back to level, overshooting slightly past zero for a bit of snap.
+                float r = Mathf.Clamp01((landingTimer - landingDiveDuration) / Mathf.Max(0.001f, landingRecoverDuration));
+                t = Mathf.Cos(r * Mathf.PI * 0.5f) - 0.12f * Mathf.Sin(r * Mathf.PI);
+            }
+
+            landingPitchOffset = landingPitchAmount * landingStrength * t;
+            landingDipOffset = -landingDipAmount * landingStrength * t;
+        }
+
+        /// <summary>Camera pitch in degrees. Negative looks up, positive looks down.</summary>
+        public float CameraPitch
+        {
+            get => xRotation;
+            set => xRotation = Mathf.Clamp(value, -90f, 90f);
+        }
+
+        /// <summary>Camera roll (the strafe / wall-run lean) in degrees.</summary>
+        public float CameraRoll
+        {
+            get => currentTilt;
+            set
+            {
+                currentTilt = value;
+                tiltVelocity = 0f;   // reset the SmoothDamp so it resumes from rest
+            }
+        }
+
+        /// <summary>
+        /// Writes the current pitch, roll and landing offset onto the camera. Public so the
+        /// interaction system can drive the view while this controller is disabled.
+        /// </summary>
+        public void ApplyCameraOrientation()
+        {
+            if (playerCamera != null)
+                playerCamera.localRotation = Quaternion.Euler(xRotation + landingPitchOffset, 0f, currentTilt);
+        }
+
         public bool CheckLedge(out Vector3 climbPosition)
         {
             climbPosition = Vector3.zero;

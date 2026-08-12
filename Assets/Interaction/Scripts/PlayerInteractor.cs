@@ -245,7 +245,11 @@ namespace InteractionSystem
             {
                 case Phase.Idle:
                     ScanForInteractable();
-                    if (InteractPressed() && _focused != null && _focused.canPickUp && InPickupRange(_focused))
+                    // Don't allow a pickup mid landing-recoil: the controller owns the camera
+                    // during that window, and the levelling tween would fight it.
+                    bool staggered = _fpc != null && _fpc.IsLookLocked;
+                    if (!staggered && InteractPressed() && _focused != null
+                        && _focused.canPickUp && InPickupRange(_focused))
                         BeginPickup(_focused);
                     break;
 

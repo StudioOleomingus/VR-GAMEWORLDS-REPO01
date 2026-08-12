@@ -9,6 +9,9 @@ namespace EasyPeasyFirstPersonController
 
         public override void EnterState()
         {
+            // Read the impact speed before it gets zeroed, so a hard landing can shake the view.
+            ctx.ReportLanding(ctx.moveDirection.y);
+
             ctx.moveDirection.y = -2f;
         }
 
@@ -16,12 +19,18 @@ namespace EasyPeasyFirstPersonController
         {
             CheckSwitchStates();
 
+            // A transition just fired; let the new state own this frame.
+            if (ctx.CurrentState != this) return;
+
             ctx.targetCameraY = ctx.standingCameraHeight;
 
             bool isSprinting = ctx.input.sprint && ctx.input.moveInput.y > 0;
-            float speed = isSprinting ? ctx.sprintSpeed : ctx.walkSpeed;
 
-            ctx.targetFov = isSprinting ? ctx.sprintFov : ctx.normalFov;
+            // Momentum ramps sprint speed and FOV up toward the parkour values the longer
+            // you hold Shift, so a sprint accelerates instead of snapping to one speed.
+            float speed = isSprinting ? ctx.CurrentSprintSpeed : ctx.walkSpeed;
+
+            ctx.targetFov = isSprinting ? ctx.CurrentSprintFov : ctx.normalFov;
             ctx.currentBobIntensity = ctx.bobAmount * (isSprinting ? 1.5f : 1f);
             ctx.currentBobSpeed = ctx.bobSpeed * (isSprinting ? 1.3f : 1f);
             ctx.targetTilt = 0;
@@ -75,6 +84,10 @@ namespace EasyPeasyFirstPersonController
             if (ctx.input.jump && ctx.isGrounded)
             {
                 SwitchState(factory.Jumping());
+            }
+            else if (ctx.CanStartWallRun(out _, out _))
+            {
+                SwitchState(factory.WallRun());
             }
             else if (ctx.input.slide && ctx.input.sprint)
             {

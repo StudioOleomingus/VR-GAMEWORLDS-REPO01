@@ -9,16 +9,32 @@ namespace EasyPeasyFirstPersonController
 
         public override void EnterState()
         {
-            HandleJump();
+            // A wall jump queues its own launch velocity, which replaces the straight-up jump.
+            if (ctx.ConsumeLaunch(out Vector3 launch))
+            {
+                ctx.moveDirection.y = launch.y;
+                ctx.currentVelocity = new Vector3(launch.x, 0f, launch.z);
+            }
+            else
+            {
+                HandleJump();
+            }
         }
 
         public override void UpdateState()
         {
-            ctx.targetFov = ctx.normalFov;
+            ctx.targetFov = ctx.enableParkour && ctx.momentum > 0.01f
+                ? Mathf.Lerp(ctx.normalFov, ctx.parkourFov, ctx.momentum)
+                : ctx.normalFov;
             ctx.currentBobIntensity = 0;
             ctx.targetTilt = 0;
 
             CheckSwitchStates();
+
+            // Bail out if a transition just fired, otherwise this state would keep applying
+            // gravity and air control for one more frame and fight the new state.
+            if (ctx.CurrentState != this) return;
+
             ApplyGravity();
             HandleAirMovement();
         }
@@ -29,6 +45,10 @@ namespace EasyPeasyFirstPersonController
             if (ctx.isGrounded && ctx.moveDirection.y < 0)
             {
                 SwitchState(factory.Grounded());
+            }
+            else if (ctx.CanStartWallRun(out _, out _))
+            {
+                SwitchState(factory.WallRun());
             }
             else if (ctx.CheckLedge(out _))
             {
@@ -57,8 +77,8 @@ namespace EasyPeasyFirstPersonController
             Vector3 targetMove = ctx.transform.right * input.x + ctx.transform.forward * input.y;
             targetMove = Vector3.ClampMagnitude(targetMove, 1f);
             
-            Vector3 targetVelocity = targetMove * ctx.walkSpeed;
-            
+            Vector3 targetVelocity = targetMove * ctx.CurrentAirSpeed;
+
             // Allow some air control (acceleration is much lower in the air than on the ground)
             float airAccel = 5f;
             

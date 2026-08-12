@@ -1,7 +1,9 @@
 # Look → Pick Up → Inspect
 
-An interaction layer for the Easy Peasy First Person Controller. Nothing in
-`Assets/EasyPeasyFirstPersonController/` was modified, so the asset stays upgradeable.
+An interaction layer for the Easy Peasy First Person Controller.
+
+> The parkour movement layer (sprint momentum, wall running, landing impact) lives in the
+> controller asset itself — see `Assets/EasyPeasyFirstPersonController/PARKOUR.md`.
 
 ## Setup
 
@@ -73,18 +75,18 @@ defaults in `InteractionPromptUI.cs`.
 - **Scripting hooks:** `PlayerInteractor.IsInspecting`, `.HeldObject`, `.FocusedObject`,
   and `.CancelInspect()` to force-drop before a scene load or cutscene.
 
-- **Camera levelling needs the Easy Peasy controller.** It reaches the private `xRotation`
-  via an additive `partial` declaration rather than editing the vendor file. If you swap
+- **Camera levelling needs the Easy Peasy controller.** It drives `CameraPitch`,
+  `CameraRoll` and `ApplyCameraOrientation()` on `FirstPersonController`. If you swap
   controllers, levelling silently switches off and the camera just freezes in place —
-  reimplement `CameraPitch` / `CameraRoll` / `ApplyCameraOrientation()` for your new
-  controller to get it back.
+  implement those three members on your new controller to get it back.
+- **Landing recoil takes priority.** You can't start a pickup while the controller has the
+  camera during a hard landing; the prompt still shows, `E` just does nothing for that beat.
 
 ## Files
 
 ```
 Assets/Interaction/Scripts/
-  Interactable.cs                       marker + per-object settings
-  PlayerInteractor.cs                   raycast, pickup/place state machine, blur, camera levelling
-  InteractionPromptUI.cs                world-space billboard popup, built at runtime
-  FirstPersonController.CameraAccess.cs additive partial exposing the controller's camera pitch
+  Interactable.cs          marker + per-object settings
+  PlayerInteractor.cs      raycast, pickup/place state machine, blur, camera levelling
+  InteractionPromptUI.cs   world-space billboard popup, built at runtime
 ```
